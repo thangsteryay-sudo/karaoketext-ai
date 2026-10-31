@@ -1,0 +1,87 @@
+services:
+  web:
+    build:
+      context: ../apps/web
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ../services/api
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://karaoke:${POSTGRES_PASSWORD:-development-only}@postgres:5432/karaoke
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_PATH: /data
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+    volumes:
+      - media-data:/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 20s
+      timeout: 4s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ../services/api
+    command: ["celery", "-A", "app.worker.celery", "worker", "--loglevel=INFO", "--concurrency=1"]
+    env_file:
+      - ../.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://karaoke:${POSTGRES_PASSWORD:-development-only}@postgres:5432/karaoke
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_PATH: /data
+    volumes:
+      - media-data:/data
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: karaoke
+      POSTGRES_USER: karaoke
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-development-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U karaoke -d karaoke"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  media-data:
+  postgres-data:
+  redis-data:
